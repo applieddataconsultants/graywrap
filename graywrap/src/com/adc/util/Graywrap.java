@@ -23,7 +23,8 @@ import org.graylog2.GelfSender;
  * @author gcarlson
  */
 public class Graywrap extends Logger{
-    private static Logger logger;
+    private Logger logger;
+    private String hostName;
     private String applicationName;
     private String serviceName;
     private String facilityName;
@@ -34,6 +35,11 @@ public class Graywrap extends Logger{
     protected Graywrap(Class aClass, Properties props) {
         super (aClass.getName());
         this.logger = getLogger(aClass.getName());
+        try {
+            hostName=InetAddress.getLocalHost().getHostName();
+        } catch (UnknownHostException ex) {
+            hostName="gelf-host";
+        }
         this.applicationName = props.getProperty("graywrap.applicationName","gelf-application");
         this.serviceName = props.getProperty("graywrap.serviceName","gelf-service");
         this.facilityName = props.getProperty("graywrap.facilityName","gelf-facility");
@@ -107,12 +113,7 @@ public class Graywrap extends Logger{
             gelfMessage.setLine(String.valueOf(stackTraceElement.getLineNumber()));
             gelfMessage.addField("application", applicationName)
                        .addField("Service", serviceName);
-            try {
-                gelfMessage.setHost(InetAddress.getLocalHost().getHostName());
-            } catch (UnknownHostException ex) {
-                gelfMessage.setHost("unknown");
-                java.util.logging.Logger.getLogger(Graywrap.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
-            }
+            gelfMessage.setHost(hostName);
             if(level.isGreaterOrEqual(graylogThreshold)){
                 try {
                     GelfSender gelfSender = new GelfSender(graylogHost, graylogPort);
