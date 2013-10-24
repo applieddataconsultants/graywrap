@@ -5,6 +5,7 @@
 package com.adc.util;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
@@ -12,13 +13,10 @@ import java.util.Date;
 import java.util.Properties;
 import java.util.Random;
 import org.apache.log4j.Level;
-import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 import static org.apache.log4j.Logger.getLogger;
-import org.apache.log4j.PropertyConfigurator;
 import org.graylog2.GelfMessage;
 import org.graylog2.GelfSender;
-import org.graylog2.log.GelfAppender;
 
 /**
  *
@@ -26,46 +24,36 @@ import org.graylog2.log.GelfAppender;
  */
 public class Graywrap extends Logger{
     private static Logger logger;
-    private static GelfAppender ROOT_GRAYLOG2;
     private String applicationName;
     private String serviceName;
-    
-    static {
-        try {
-            /*
-             * Can not assume that the logger has been configured with 
-             * log4j.properties before this static configuration is done.
-             */
-            Properties props = new java.util.Properties();
-            props.load(Graywrap.class.getClassLoader().getResourceAsStream("log4j.properties"));
-            PropertyConfigurator.configure(props);
-            GelfAppender appender = (GelfAppender)LogManager.getRootLogger().getAppender("graylog2");
-            /*
-            * If we do not create a copy of the GelfAppender to do our 
-            * work on we run into Concurrent Modification Exceptions
-            */
-            GelfAppender graylog2 = new GelfAppender();
-            graylog2.setThreshold(appender.getThreshold());
-            graylog2.setExtractStacktrace(appender.isExtractStacktrace());
-            graylog2.setGraylogHost(appender.getGraylogHost());
-            graylog2.setGraylogPort(appender.getGraylogPort());
-            graylog2.setFacility(appender.getFacility());
-            ROOT_GRAYLOG2=graylog2;            
-        } catch (IOException ex) {
-            //Where do we log errors before the logger is set up?
-        }
-    }
+    private String facilityName;
+    private Level graylogThreshold;
+    private String graylogHost;
+    private Integer graylogPort;
 
-    public Graywrap(String name, String applicationName, String serviceName) {
-        super (name);
-        logger = getLogger(name);
-        logger.setLevel(Level.ALL);
-        this.applicationName=applicationName;
-        this.serviceName=serviceName;
+    protected Graywrap(Class aClass, Properties props) {
+        super (aClass.getName());
+        this.logger = getLogger(aClass.getName());
+        this.applicationName = props.getProperty("graywrap.applicationName","gelf-application");
+        this.serviceName = props.getProperty("graywrap.serviceName","gelf-service");
+        this.facilityName = props.getProperty("graywrap.facilityName","gelf-facility");
+        this.graylogThreshold = Level.toLevel(props.getProperty("graywrap.threshold","INFO"));
+        this.graylogHost = props.getProperty("graywrap.host");
+        this.graylogPort = Integer.valueOf(props.getProperty("graywrap.port"));
     }
     
-    public static Graywrap getLogger(Class aClass, String applicationName, String serviceName){
-        return new Graywrap(aClass.getName(), applicationName, serviceName);
+    public static Graywrap getLogger(Class aClass, Properties props){
+        return new Graywrap(aClass, props);
+    }
+    
+    public static Graywrap getLogger(Class aClass, String resource){
+        Properties props = new java.util.Properties();
+        try {
+            props.load(Graywrap.class.getClassLoader().getResourceAsStream(resource));
+        } catch (IOException ex) {
+            //Where do you log an error if you are inside the logger constructor?
+        }
+        return new Graywrap(aClass, props);
     }
     
     private void sendGelfMessage(String shortMessage, String longMessage, String facility, Throwable throwable, Level level){
@@ -119,10 +107,15 @@ public class Graywrap extends Logger{
             gelfMessage.setLine(String.valueOf(stackTraceElement.getLineNumber()));
             gelfMessage.addField("application", applicationName)
                        .addField("Service", serviceName);
-            gelfMessage.setHost(ROOT_GRAYLOG2.getOriginHost());
-            if(ROOT_GRAYLOG2.getThreshold().isGreaterOrEqual(level)){
+            try {
+                gelfMessage.setHost(InetAddress.getLocalHost().getHostName());
+            } catch (UnknownHostException ex) {
+                gelfMessage.setHost("unknown");
+                java.util.logging.Logger.getLogger(Graywrap.class.getName()).log(java.util.logging.Level.SEVERE, null, ex);
+            }
+            if(level.isGreaterOrEqual(graylogThreshold)){
                 try {
-                    GelfSender gelfSender = new GelfSender(ROOT_GRAYLOG2.getGraylogHost(), ROOT_GRAYLOG2.getGraylogPort());
+                    GelfSender gelfSender = new GelfSender(graylogHost, graylogPort);
                     if(gelfMessage.isValid()){
                         gelfSender.sendMessage(gelfMessage);                    
                     }
@@ -138,12 +131,12 @@ public class Graywrap extends Logger{
     @Override
     public void debug(Object message){
         logger.debug(message);
-        sendGelfMessage(message.toString(), message.toString(), "-", null, Level.DEBUG);
+        sendGelfMessage(message.toString(), message.toString(), facilityName, null, Level.DEBUG);
     }
     
     public void debug(Object shortMessage, Object longMessage){
         logger.debug(shortMessage);
-        sendGelfMessage(shortMessage.toString(), longMessage.toString(), "-", null, Level.DEBUG);
+        sendGelfMessage(shortMessage.toString(), longMessage.toString(), facilityName, null, Level.DEBUG);
     }
       
     public void debug(Object message, String facility){
@@ -159,7 +152,7 @@ public class Graywrap extends Logger{
     @Override
     public void debug(Object message, Throwable throwable){
         logger.debug(message,throwable);
-        sendGelfMessage(message.toString(), message.toString(), "-", throwable, Level.DEBUG);
+        sendGelfMessage(message.toString(), message.toString(), facilityName, throwable, Level.DEBUG);
     }
     
     public void debug(Object message, String facility, Throwable throwable){
@@ -170,12 +163,12 @@ public class Graywrap extends Logger{
     @Override
     public void error(Object message){
         logger.error(message);
-        sendGelfMessage(message.toString(), message.toString(), "-", null, Level.ERROR);
+        sendGelfMessage(message.toString(), message.toString(), facilityName, null, Level.ERROR);
     }
     
     public void error(Object shortMessage, Object longMessage){
         logger.error(shortMessage);
-        sendGelfMessage(shortMessage.toString(), longMessage.toString(), "-", null, Level.ERROR);
+        sendGelfMessage(shortMessage.toString(), longMessage.toString(), facilityName, null, Level.ERROR);
     }
       
     public void error(Object message, String facility){
@@ -191,7 +184,7 @@ public class Graywrap extends Logger{
     @Override
     public void error(Object message, Throwable throwable){
         logger.error(message,throwable);
-        sendGelfMessage(message.toString(), message.toString(), "-", throwable, Level.ERROR);
+        sendGelfMessage(message.toString(), message.toString(), facilityName, throwable, Level.ERROR);
     }
     
     public void error(Object message, String facility, Throwable throwable){
@@ -202,12 +195,12 @@ public class Graywrap extends Logger{
     @Override
     public void fatal(Object message){
         logger.fatal(message);
-        sendGelfMessage(message.toString(), message.toString(), "-", null, Level.FATAL);
+        sendGelfMessage(message.toString(), message.toString(), facilityName, null, Level.FATAL);
     }
     
     public void fatal(Object shortMessage, Object longMessage){
         logger.fatal(shortMessage);
-        sendGelfMessage(shortMessage.toString(), longMessage.toString(), "-", null, Level.FATAL);
+        sendGelfMessage(shortMessage.toString(), longMessage.toString(), facilityName, null, Level.FATAL);
     }
       
     public void fatal(Object message, String facility){
@@ -223,7 +216,7 @@ public class Graywrap extends Logger{
     @Override
     public void fatal(Object message, Throwable throwable){
         logger.fatal(message,throwable);
-        sendGelfMessage(message.toString(), message.toString(), "-", null, Level.FATAL);
+        sendGelfMessage(message.toString(), message.toString(), facilityName, null, Level.FATAL);
     }
     
     public void fatal(Object message, String facility, Throwable throwable){
@@ -234,12 +227,12 @@ public class Graywrap extends Logger{
     @Override
     public void info(Object message){
         logger.info(message);
-        sendGelfMessage(message.toString(), message.toString(), "-", null, Level.INFO);
+        sendGelfMessage(message.toString(), message.toString(), facilityName, null, Level.INFO);
     }
     
     public void info(Object shortMessage, Object longMessage){
         logger.info(shortMessage);
-        sendGelfMessage(shortMessage.toString(), longMessage.toString(), "-", null, Level.INFO);
+        sendGelfMessage(shortMessage.toString(), longMessage.toString(), facilityName, null, Level.INFO);
     }
       
     public void info(Object message, String facility){
@@ -255,7 +248,7 @@ public class Graywrap extends Logger{
     @Override
     public void info(Object message, Throwable throwable){
         logger.info(message,throwable);
-        sendGelfMessage(message.toString(), message.toString(), "-", null, Level.INFO);
+        sendGelfMessage(message.toString(), message.toString(), facilityName, null, Level.INFO);
     }
     
     public void info(Object message, String facility, Throwable throwable){
@@ -266,12 +259,12 @@ public class Graywrap extends Logger{
     @Override
     public void warn(Object message){
         logger.warn(message);
-        sendGelfMessage(message.toString(), message.toString(), "-", null, Level.WARN);
+        sendGelfMessage(message.toString(), message.toString(), facilityName, null, Level.WARN);
     }
     
     public void warn(Object shortMessage, Object longMessage){
         logger.warn(shortMessage);
-        sendGelfMessage(shortMessage.toString(), longMessage.toString(), "-", null, Level.WARN);
+        sendGelfMessage(shortMessage.toString(), longMessage.toString(), facilityName, null, Level.WARN);
     }
       
     public void warn(Object message, String facility){
@@ -287,7 +280,7 @@ public class Graywrap extends Logger{
     @Override
     public void warn(Object message, Throwable throwable){
         logger.warn(message,throwable);
-        sendGelfMessage(message.toString(), message.toString(), "-", null, Level.WARN);
+        sendGelfMessage(message.toString(), message.toString(), facilityName, null, Level.WARN);
     }
     
     public void warn(Object message, String facility, Throwable throwable){
